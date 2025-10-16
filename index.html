@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marsh Chat Assistant</title>
+    <!-- Load Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the app */
+        body { margin: 0; padding: 0; }
+        .chat-container { overflow-y: auto; }
+        .chat-container::-webkit-scrollbar { width: 8px; }
+        .chat-container::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 4px; }
+
+        /* --- Message Bounce Animation --- */
+        @keyframes messageBounce {
+            /* Starts slightly below, smaller, and invisible */
+            0% { transform: translateY(10px) scale(0.95); opacity: 0; }
+            /* Ends at its final position and size */
+            100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        .message-bounce {
+            /* Apply the animation once when the element appears */
+            animation: messageBounce 0.3s ease-out forwards;
+            /* Ensure the message starts hidden before the animation begins */
+            opacity: 0; 
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+    <!-- The JavaScript will dynamically populate the entire UI inside this element -->
+    <div id="root-app" class="flex flex-col max-w-xl mx-auto shadow-xl min-h-screen"></div>
+
+    <script>
+        // V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V
+        // ** API KEY INSERTED **
+        // This is the key used to authenticate with the Google Gemini API.
+        const API_KEY = "AIzaSyBDhY98o--nEW4UJe5rAnfEkg-Vo5ZV8X4";
+        // ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
+
+        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${API_KEY}`;
+        const ROOT_ELEMENT = document.getElementById('root-app');
+        
+        // State variables
+        let userInput, sendButton, messagesDiv, errorBar;
+        let isThinking = false;
+
+        // --- New Markdown Formatting Function ---
+        const formatMarkdown = (text) => {
+            if (!text) return '';
+            // Convert **bold** to <b>bold</b> (simple regex for basic bolding)
+            let formatted = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+            // Convert newline characters (\n) to HTML break tags (<br>)
+            formatted = formatted.replace(/\n/g, '<br>');
+            return formatted;
+        };
+        
+        // --- UI Creation Functions ---
+
+        const createAndAppend = (tag, parent, classes = '', innerHTML = '') => {
+            const element = document.createElement(tag);
+            if (classes) element.className = classes;
+            if (innerHTML) element.innerHTML = innerHTML;
+            parent.appendChild(element);
+            return element;
+        };
+
+        const createMessageBubble = (content, isUser) => {
+            const container = createAndAppend('div', messagesDiv, isUser ? 'flex justify-end' : 'flex justify-start');
+            
+            const bubbleClass = isUser
+                ? 'bg-blue-600 text-white rounded-t-xl rounded-bl-xl shadow-lg'
+                : 'bg-white text-gray-800 rounded-t-xl rounded-br-xl shadow-md';
+
+            const bubble = document.createElement('div');
+            // Apply the bubble class AND the message-bounce animation class
+            bubble.className = `${bubbleClass} p-3 max-w-xs transition duration-300 ease-in-out message-bounce`; 
+            
+            // USE THE NEW MARKDOWN FORMATTER HERE
+            bubble.innerHTML = formatMarkdown(content);
+            
+            container.appendChild(bubble);
+            
+            // Wait for DOM paint before scrolling
+            requestAnimationFrame(scrollToBottom);
+            return bubble;
+        };
+        
+        const createInitialWelcomeMessage = () => {
+             createMessageBubble("Hello Iâm Marsh! How can I help you? I can help with stuff like food recipes, coding questions, and more! (Powered by Google Gemini)", false);
+        };
+
+        // --- Splash Screen Logic ---
+
+        const setupSplashScreen = () => {
+            const splash = createAndAppend('div', document.body, 
+                'fixed inset-0 z-[100] flex flex-col items-center justify-center bg-blue-600 opacity-100 transition-opacity duration-1000');
+            splash.id = 'splash-screen';
+            
+            createAndAppend('h1', splash, 'text-6xl font-extrabold text-white mb-40 select-none', 'Welcome');
+            
+            const authorBox = createAndAppend('div', splash, 'absolute bottom-10');
+            createAndAppend('p', authorBox, 'text-sm text-white opacity-70 select-none', 'made by Tyson bowden');
+
+            // Start fade-out after 5 seconds
+            setTimeout(() => {
+                splash.style.opacity = '0'; // Start fade out
+                ROOT_ELEMENT.style.opacity = '1'; // Start fade in of main app
+
+                // Remove splash from DOM after transition completes (1 second)
+                setTimeout(() => {
+                    splash.remove();
+                }, 1000);
+
+            }, 5000); // 5 seconds wait
+        };
+
+        // --- Core UI Setup ---
+
+        const setupMainUI = () => {
+            ROOT_ELEMENT.classList.add('opacity-0', 'transition-opacity', 'duration-1000', 'h-screen', 'w-full');
+
+            // Header
+            const header = createAndAppend('header', ROOT_ELEMENT, 'bg-white p-4 border-b border-gray-200 shadow-md');
+            createAndAppend('h1', header, 'text-2xl font-extrabold text-violet-700', 'Marsh Assistant');
+
+            // Message Container
+            messagesDiv = createAndAppend('div', ROOT_ELEMENT, 'flex-grow p-4 space-y-4 overflow-y-auto chat-container');
+            messagesDiv.style.height = 'calc(100vh - 140px)'; // Calculate height for mobile view
+
+            createInitialWelcomeMessage();
+            
+            // Input and Send Area
+            const inputArea = createAndAppend('div', ROOT_ELEMENT, 'bg-white p-4 border-t border-gray-200');
+
+            // Error Bar
+            errorBar = createAndAppend('div', inputArea, 'hidden text-center p-2 bg-red-500 text-white font-medium text-sm mb-2');
+            errorBar.id = 'error-message';
+
+            // Disclaimer (Emojis removed)
+            createAndAppend('p', inputArea, 'text-xs text-center text-red-500 mb-2', 
+                'AI Disclaimer: AI can make mistakes. Verify critical details. Take it with a grain of salt.');
+
+            const inputRow = createAndAppend('div', inputArea, 'flex items-center space-x-3');
+
+            userInput = createAndAppend('input', inputRow, 
+                'flex-grow p-3 border border-gray-300 rounded-full focus:ring-violet-500 focus:border-violet-500 transition duration-150');
+            userInput.id = 'user-input';
+            userInput.type = 'text';
+            userInput.placeholder = 'Ask Marsh anything...';
+            userInput.onkeydown = (e) => {
+                if (e.key === 'Enter') sendMessage();
+            };
+            // Ensure the input listener uses the global 'isThinking' state
+            userInput.addEventListener('input', () => updateInputState(isThinking));
+
+            // UPDATED SEND BUTTON DESIGN AND ICON
+            sendButton = createAndAppend('button', inputRow, 
+                // New gradient and stronger shadow for visual appeal
+                'bg-gradient-to-br from-violet-600 to-indigo-700 text-white p-3.5 rounded-full shadow-2xl ' +
+                // Hover/Active states for better feedback
+                'hover:from-violet-500 hover:to-indigo-600 transition duration-150 transform hover:scale-105 active:scale-95 ' +
+                // Disabled state
+                'disabled:bg-gray-400 disabled:shadow-md disabled:transform-none');
+            sendButton.id = 'send-button';
+            sendButton.disabled = true;
+            sendButton.onclick = sendMessage;
+            
+            // SVG Paper Airplane Icon
+            sendButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
+                <path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.817-2.432 7.817a.75.75 0 0 0 .926.94 10.38 10.38 0 0 0 5.406-1.42 10.38 10.38 0 0 0 5.406 1.42.75.75 0 0 0 .926-.94l-2.432-7.817 2.432-7.817a.75.75 0 0 0-.926-.94 10.38 10.38 0 0 0-5.406 1.42 10.38 10.38 0 0 0-5.406-1.42Z" />
+            </svg>`;
+            
+            // Add thinking indicator element to the end of the chat
+            const thinkingContainer = createAndAppend('div', messagesDiv, 'flex justify-start hidden');
+            thinkingContainer.id = 'thinking-indicator-container';
+            const thinkingBubble = createAndAppend('div', thinkingContainer, 
+                'bg-white text-gray-800 p-3 rounded-t-xl rounded-br-xl shadow-md max-w-xs transition duration-300 ease-in-out', 'Marsh is thinking...');
+            thinkingBubble.id = 'thinking-indicator';
+        };
+
+        // --- Utility and State Management ---
+
+        const scrollToBottom = () => {
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        };
+
+        const displayError = (message) => {
+            errorBar.textContent = `API Error: ${message}`;
+            errorBar.classList.remove('hidden');
+            setTimeout(() => {
+                errorBar.classList.add('hidden');
+            }, 5000);
+        };
+
+        const updateInputState = (isThinking) => {
+            userInput.disabled = isThinking;
+            sendButton.disabled = isThinking || userInput.value.trim() === '';
+        };
+
+        const showThinking = (show) => {
+            isThinking = show;
+            const indicatorContainer = document.getElementById('thinking-indicator-container');
+            if (show) {
+                indicatorContainer.classList.remove('hidden');
+            } else {
+                indicatorContainer.classList.add('hidden');
+            }
+            updateInputState(show);
+            scrollToBottom();
+        };
+
+        // --- Core Gemini API Fetch Logic (Replicated) ---
+
+        const fetchFromGeminiApi = async (prompt) => {
+            const normalizedPrompt = prompt.toLowerCase().trim();
+
+            // 1. Hardcoded Check Logic
+            if (normalizedPrompt.includes("who made you") || normalizedPrompt.includes("who created you")) {
+                // This text now gets formatted by the new function
+                return "I was made by **Tyson bowden**."; 
+            }
+            if (normalizedPrompt.includes("why did i make marsh") || normalizedPrompt.includes("why did you make marsh")) {
+                // This text now gets formatted by the new function
+                return "Tyson made me to be a friendly and helpful assistant that can quickly answer questions, find recipes, and help with other everyday tasks!";
+            }
+            
+            // 2. Network check
+            if (API_KEY.trim() === "") {
+                throw new Error("API Key is missing. Cannot proceed with online search.");
+            }
+
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: {
+                    parts: [{ text: "You are a friendly, helpful, and concise chat assistant named Marsh. Format your responses using Markdown." }]
+                },
+            };
+
+            const response = await fetch(GEMINI_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.json();
+                throw new Error(errorBody.error?.message || `HTTP error! Status: ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            return result.candidates?.[0]?.content?.parts?.[0]?.text || "I was unable to generate a response. Please try again.";
+        };
+
+        // --- Main Send Message Function ---
+
+        const sendMessage = async () => {
+            if (isThinking) return;
+            const prompt = userInput.value.trim();
+            if (!prompt) return;
+
+            createMessageBubble(prompt, true);
+            userInput.value = '';
+            showThinking(true);
+
+            try {
+                const aiResponse = await fetchFromGeminiApi(prompt);
+                createMessageBubble(aiResponse, false);
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                displayError(error.message);
+                createMessageBubble("Sorry, I encountered an error. Please check the API key and network connection.", false);
+
+            } finally {
+                showThinking(false);
+            }
+        };
+
+        // --- Initialization ---
+
+        const initializeApp = () => {
+            setupMainUI();
+            setupSplashScreen(); // Splash screen controls the visibility of the main UI
+        };
+
+        document.addEventListener('DOMContentLoaded', initializeApp);
+
+    </script>
+</body>
+</html>
+
